@@ -1,0 +1,42 @@
+# Build outputs
+build/
+build_debug/
+build_rwd/
+
+# JUCE framework (large, users clone separately)
+JUCE/
+
+# Distribution packages (uploaded as GitHub Releases)
+ProEQ_v*/
+SimpleDynamicEQ_v*/
+
+# IDE / Editor
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+
+# Build artifacts
+*.obj
+*.o
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.idb
+
+# Build logs
+build_log.txt
+ninja_log.txt
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Misc
+*.rar
+*.pdb
+Gemini_*
