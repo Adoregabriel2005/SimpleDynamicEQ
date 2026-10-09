@@ -3,9 +3,11 @@ name: Build Multi-Platform Plugins (Windows & Mac)
 on:
   push:
     branches: [ "master", "main" ]
-  pull_request:
-    branches: [ "master", "main" ]
+    tags: [ "v*" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   # =========================================================================
@@ -29,18 +31,19 @@ jobs:
         run: |
           cmake --build build --config Release --parallel
 
-      - name: Package Windows Artifacts
+      - name: Package Windows Files
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path "dist/Windows" -Force
           Get-ChildItem -Path "build" -Filter "*.vst3" -Recurse | Copy-Item -Destination "dist/Windows" -Recurse -Force
           Get-ChildItem -Path "build" -Filter "*.exe" -Recurse | Copy-Item -Destination "dist/Windows" -Force
+          Compress-Archive -Path "dist/Windows/*" -DestinationPath "SimpleDynamicEQ-Windows.zip" -Force
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: SimpleDynamicEQ-Windows
-          path: dist/Windows/
+          path: SimpleDynamicEQ-Windows.zip
 
   # =========================================================================
   # 2. MACOS BUILD (AU + VST3 + Standalone - Universal arm64/x86_64)
@@ -65,15 +68,71 @@ jobs:
         run: |
           cmake --build build --config Release --parallel
 
-      - name: Package macOS Artifacts
+      - name: Package macOS Files
         run: |
           mkdir -p dist/macOS
           find build -type d -name "*.component" -exec cp -R {} dist/macOS/ \;
           find build -type d -name "*.vst3" -exec cp -R {} dist/macOS/ \;
           find build -type d -name "*.app" -exec cp -R {} dist/macOS/ \;
+          cd dist && zip -r ../SimpleDynamicEQ-macOS-Universal.zip macOS && cd ..
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: SimpleDynamicEQ-macOS-Universal
-          path: dist/macOS/
+          path: SimpleDynamicEQ-macOS-Universal.zip
+
+  # =========================================================================
+  # 3. CREATE GITHUB RELEASE WITH ZIP PACKAGES
+  # =========================================================================
+  create-release:
+    name: Publish Release Packages
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: SimpleDynamicEQ-Windows
+          path: release-files/
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: SimpleDynamicEQ-macOS-Universal
+          path: release-files/
+
+      - name: Create Combined All-DAWs Zip
+        run: |
+          mkdir -p all-daws-bundle
+          cp release-files/* all-daws-bundle/
+          cd all-daws-bundle && zip -r ../SimpleDynamicEQ-All-DAWs-Universal.zip . && cd ..
+          mv SimpleDynamicEQ-All-DAWs-Universal.zip release-files/
+
+      - name: Release to GitHub
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.2-universal
+          name: "SimpleDynamicEQ v1.2 Universal (Windows & Mac)"
+          body: |
+            ## 🎵 SimpleDynamicEQ v1.2 Universal (Windows & macOS)
+
+            Equalizador paramétrico de 24 bandas com Dynamic EQ, Analyzer FFT e suporte universal a todas as DAWs.
+
+            ### 📦 Arquivos para Download:
+            - **`SimpleDynamicEQ-Windows.zip`**: VST3 e Standalone para Windows (FL Studio, Ableton, Reaper, Cubase, Studio One).
+            - **`SimpleDynamicEQ-macOS-Universal.zip`**: AU (.component) para Logic Pro / GarageBand e VST3 para Mac (Apple Silicon M1/M2/M3/M4 & Intel).
+            - **`SimpleDynamicEQ-All-DAWs-Universal.zip`**: Pacote completo contendo todas as versões para Windows e Mac.
+
+            ### 🚀 Instalação:
+            - **Windows VST3:** Copie `SimpleDynamicEQ.vst3` para `C:\Program Files\Common Files\VST3\`
+            - **macOS AU (Logic Pro / GarageBand):** Copie `SimpleDynamicEQ.component` para `~/Library/Audio/Plug-Ins/Components/`
+            - **macOS VST3:** Copie `SimpleDynamicEQ.vst3` para `~/Library/Audio/Plug-Ins/VST3/`
+          files: |
+            release-files/SimpleDynamicEQ-Windows.zip
+            release-files/SimpleDynamicEQ-macOS-Universal.zip
+            release-files/SimpleDynamicEQ-All-DAWs-Universal.zip
+          draft: false
+          prerelease: false
