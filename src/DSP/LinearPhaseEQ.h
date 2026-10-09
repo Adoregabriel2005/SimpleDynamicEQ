@@ -74,6 +74,7 @@ public:
     }
 
     void processStereo(float* L, float* R, int numSamples);
+    void processMono(float* L, int numSamples) { processChannel(L, numSamples, overlapL); }
 
     int getLatencySamples() const { return kKernelSize; }
 

@@ -80,6 +80,9 @@ public:
     // Stereo process (L/R or M/S depending on mode)
     void processStereo(float* L, float* R, int numSamples);
 
+    // Mono process (channel L only)
+    void processMono(float* L, int numSamples);
+
     Params& getParams()             { return p; }
     const Params& getParams() const { return p; }
     void   setParams(const Params& newP);

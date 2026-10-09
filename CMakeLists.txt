@@ -1,32 +1,57 @@
-﻿cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.22)
 project(SimpleDynamicEQ VERSION 1.2.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # -----------------------------------------------------------------------
-# JUCE â€“ clone if not present
+# macOS Multi-Architecture & Compatibility Settings
 # -----------------------------------------------------------------------
-# JUCE bundled locally
-
-add_subdirectory(JUCE)
+if(APPLE)
+    # Build Universal Binary (Apple Silicon arm64 + Intel x86_64)
+    if(NOT CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architectures for Mac" FORCE)
+    endif()
+    # Support macOS 10.15 Catalina and newer (Logic Pro, Ableton, FL Studio, Reaper)
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum OS X version" FORCE)
+    endif()
+endif()
 
 # -----------------------------------------------------------------------
-# Plugin target
+# JUCE Library Integration (Local folder or automatic download)
+# -----------------------------------------------------------------------
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
+    add_subdirectory(JUCE)
+else()
+    include(FetchContent)
+    FetchContent_Declare(
+        JUCE
+        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+        GIT_TAG        7.0.12
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(JUCE)
+endif()
+
+# -----------------------------------------------------------------------
+# Plugin Target
 # -----------------------------------------------------------------------
 juce_add_plugin(ProEQ
-    COMPANY_NAME         "GoriSound"
+    COMPANY_NAME             "GoriSound"
     PLUGIN_MANUFACTURER_CODE "GrSd"
-    PLUGIN_CODE          "PrEQ"
-    FORMATS              VST3 Standalone
-    PRODUCT_NAME         "SimpleDynamicEQ"
-    IS_SYNTH             FALSE
-    NEEDS_MIDI_INPUT     FALSE
-    NEEDS_MIDI_OUTPUT    FALSE
-    IS_MIDI_EFFECT       FALSE
+    PLUGIN_CODE              "PrEQ"
+    FORMATS                  VST3 AU Standalone
+    PRODUCT_NAME             "SimpleDynamicEQ"
+    BUNDLE_ID                "com.gorisound.simpledynamiceq"
+    IS_SYNTH                 FALSE
+    NEEDS_MIDI_INPUT         FALSE
+    NEEDS_MIDI_OUTPUT        FALSE
+    IS_MIDI_EFFECT           FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    VST3_CATEGORIES      "Fx" "EQ"
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    VST3_CATEGORIES          "Fx" "EQ" "Dynamics"
+    AU_MAIN_TYPE             kAudioUnitType_Effect
+    COPY_PLUGIN_AFTER_BUILD  TRUE
 )
 
 juce_generate_juce_header(ProEQ)
@@ -62,6 +87,7 @@ target_compile_definitions(ProEQ
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_SILENCE_XCODE_15_LINKER_WARNING=1
 )
 
 target_link_libraries(ProEQ
@@ -85,9 +111,8 @@ target_link_libraries(ProEQ
         juce::juce_recommended_warning_flags
 )
 
-# Generate linker map file for crash analysis
+# Debug / Linker options
 if (MSVC)
     target_link_options(ProEQ PRIVATE /MAP /Zi)
     target_compile_options(ProEQ PRIVATE /Zi)
 endif()
-

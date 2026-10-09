@@ -1,0 +1,79 @@
+name: Build Multi-Platform Plugins (Windows & Mac)
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+jobs:
+  # =========================================================================
+  # 1. WINDOWS BUILD (VST3 + Standalone)
+  # =========================================================================
+  build-windows:
+    name: Windows x64 (VST3 & Standalone)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -S .
+
+      - name: Build Plugin
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Package Windows Artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "dist/Windows" -Force
+          Get-ChildItem -Path "build" -Filter "*.vst3" -Recurse | Copy-Item -Destination "dist/Windows" -Recurse -Force
+          Get-ChildItem -Path "build" -Filter "*.exe" -Recurse | Copy-Item -Destination "dist/Windows" -Force
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleDynamicEQ-Windows
+          path: dist/Windows/
+
+  # =========================================================================
+  # 2. MACOS BUILD (AU + VST3 + Standalone - Universal arm64/x86_64)
+  # =========================================================================
+  build-macos:
+    name: macOS Universal (AU Logic Pro, VST3 & Standalone)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake for Universal Binary
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15" \
+            -S .
+
+      - name: Build AU, VST3 and Standalone
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Package macOS Artifacts
+        run: |
+          mkdir -p dist/macOS
+          find build -type d -name "*.component" -exec cp -R {} dist/macOS/ \;
+          find build -type d -name "*.vst3" -exec cp -R {} dist/macOS/ \;
+          find build -type d -name "*.app" -exec cp -R {} dist/macOS/ \;
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleDynamicEQ-macOS-Universal
+          path: dist/macOS/

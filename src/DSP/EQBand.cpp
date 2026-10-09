@@ -422,6 +422,70 @@ void EQBand::processStereo(float* L, float* R, int numSamples)
 }
 
 // -----------------------------------------------------------------------
+//  processMono
+// -----------------------------------------------------------------------
+void EQBand::processMono(float* L, int numSamples)
+{
+    // Apply any pending parameter update posted from the message thread.
+    if (paramsReady.load(std::memory_order_acquire))
+    {
+        paramsReady.store(false, std::memory_order_relaxed);
+        p = pendingParams;
+        attackCoeff  = std::exp(-1.0 / (0.001 * p.attack  * sampleRate));
+        releaseCoeff = std::exp(-1.0 / (0.001 * p.release * sampleRate));
+        updateCoeffs();
+    }
+
+    if (!p.enabled) return;
+
+    // In pure mono, Side channel does not exist
+    if (p.mode == ProcessingMode::SideOnly) return;
+
+    // Dynamic EQ: compute target gain once per block from peak amplitude
+    if (p.dynamic && (p.type != FilterType::LowCut && p.type != FilterType::HighCut))
+    {
+        double blockPeak = 0.0;
+        for (int i = 0; i < numSamples; ++i)
+            blockPeak = std::max(blockPeak, (double)std::abs(L[i]));
+
+        double envNow    = computeEnvelope(blockPeak, envL);
+        double envDb     = linToDb(envNow + 1e-12);
+        double overshoot = envDb - p.threshold;
+
+        double targetGain;
+        if (overshoot > 0.0)
+        {
+            double ratio  = std::min(overshoot / std::max(std::abs(p.threshold), 1.0), 1.0);
+            double sign   = (p.gainDb >= 0.0) ? -1.0 : 1.0;
+            targetGain    = p.dynamicRange * ratio * sign;
+        }
+        else
+        {
+            targetGain = 0.0;
+        }
+
+        const double smoothAlpha = 0.1;
+        currentGainDb += smoothAlpha * (targetGain - currentGainDb);
+
+        Params dynP = p;
+        dynP.gainDb = p.gainDb + currentGainDb;
+        double effGain = dynP.gainDb;
+        double effQ    = dynP.Q;
+        applyAnalogModel(dynP.model, dynP.type, dynP.freqHz, effGain, effQ);
+        filters[0].setCoeffs(computeCoeffs(dynP.type, dynP.freqHz,
+                                            effGain, effQ, sampleRate));
+    }
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float s = L[i];
+        for (int k = 0; k < numSections; ++k)
+            s = filters[k].processSampleL(s);
+        L[i] = s;
+    }
+}
+
+// -----------------------------------------------------------------------
 //  getMagnitudeAtFreq  – used for GUI curve drawing
 // -----------------------------------------------------------------------
 double EQBand::getMagnitudeAtFreq(double freq, double sr) const

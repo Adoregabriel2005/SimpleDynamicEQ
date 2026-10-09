@@ -175,8 +175,17 @@ void ProEQProcessor::releaseResources() {}
 
 bool ProEQProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
-    if (layouts.getMainInputChannelSet()  != juce::AudioChannelSet::stereo()) return false;
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo()) return false;
+    const auto& mainIn  = layouts.getMainInputChannelSet();
+    const auto& mainOut = layouts.getMainOutputChannelSet();
+
+    // Input and output layout must match
+    if (mainIn != mainOut)
+        return false;
+
+    // Support both Mono and Stereo tracks in all DAWs
+    if (mainIn != juce::AudioChannelSet::mono() && mainIn != juce::AudioChannelSet::stereo())
+        return false;
+
     return true;
 }
 
@@ -191,6 +200,9 @@ void ProEQProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Guard against host calling processBlock before prepareToPlay
     if (pAnalyzerPre == nullptr) return;
 
+    const int numChannels = buffer.getNumChannels();
+    if (numChannels == 0) return;
+
     const int numSamples = buffer.getNumSamples();
 
     // In standalone mode, read audio from file player transport
@@ -201,7 +213,7 @@ void ProEQProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     float* L = buffer.getWritePointer(0);
-    float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : L;
+    float* R = numChannels > 1 ? buffer.getWritePointer(1) : nullptr;
 
     // Read cached atomic pointers — no map lookup, just a load.
     const bool      analyzerPre = (bool) pAnalyzerPre->load(std::memory_order_relaxed);
@@ -212,37 +224,83 @@ void ProEQProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // Pre-fader analyzer
     if (analyzerPre)
-        spectrumAnalyzer.pushSamples(L, R, numSamples);
+        spectrumAnalyzer.pushSamples(L, R != nullptr ? R : L, numSamples);
 
     // -------- Apply all bands --------
-    if (phMode == PhaseMode::LinearPhase)
+    if (R != nullptr)
     {
-        // All bands are baked into the FIR kernel; just convolve
-        linearPhaseEQ.processStereo(L, R, numSamples);
-    }
-    else
-    {
-        // Check if any band is soloed (cached pointers — no map lookup)
-        int soloedBand = -1;
-        for (int b = 0; b < kMaxBands; ++b)
+        // Stereo processing
+        if (phMode == PhaseMode::LinearPhase)
         {
-            if (pBandSolo[b]->load(std::memory_order_relaxed) > 0.5f)
-            {
-                soloedBand = b;
-                break;
-            }
-        }
-
-        if (soloedBand >= 0)
-        {
-            bands[soloedBand].processStereo(L, R, numSamples);
+            // All bands are baked into the FIR kernel; just convolve
+            linearPhaseEQ.processStereo(L, R, numSamples);
         }
         else
         {
-            // Only process enabled bands
+            // Check if any band is soloed
+            int soloedBand = -1;
             for (int b = 0; b < kMaxBands; ++b)
-                if (pBandEnabled[b]->load(std::memory_order_relaxed) > 0.5f)
-                    bands[b].processStereo(L, R, numSamples);
+            {
+                if (pBandSolo[b]->load(std::memory_order_relaxed) > 0.5f)
+                {
+                    soloedBand = b;
+                    break;
+                }
+            }
+
+            if (soloedBand >= 0)
+            {
+                bands[soloedBand].processStereo(L, R, numSamples);
+            }
+            else
+            {
+                // Only process enabled bands
+                for (int b = 0; b < kMaxBands; ++b)
+                    if (pBandEnabled[b]->load(std::memory_order_relaxed) > 0.5f)
+                        bands[b].processStereo(L, R, numSamples);
+            }
+        }
+
+        // Mono summing (if toggled)
+        if (monoMode)
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float mono = (L[i] + R[i]) * 0.5f;
+                L[i] = mono;
+                R[i] = mono;
+            }
+        }
+    }
+    else
+    {
+        // Pure Mono processing (e.g. vocal/mono tracks in Logic, Cubase, Pro Tools, Reaper)
+        if (phMode == PhaseMode::LinearPhase)
+        {
+            linearPhaseEQ.processMono(L, numSamples);
+        }
+        else
+        {
+            int soloedBand = -1;
+            for (int b = 0; b < kMaxBands; ++b)
+            {
+                if (pBandSolo[b]->load(std::memory_order_relaxed) > 0.5f)
+                {
+                    soloedBand = b;
+                    break;
+                }
+            }
+
+            if (soloedBand >= 0)
+            {
+                bands[soloedBand].processMono(L, numSamples);
+            }
+            else
+            {
+                for (int b = 0; b < kMaxBands; ++b)
+                    if (pBandEnabled[b]->load(std::memory_order_relaxed) > 0.5f)
+                        bands[b].processMono(L, numSamples);
+            }
         }
     }
 
@@ -250,24 +308,13 @@ void ProEQProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const float outGainLin = juce::Decibels::decibelsToGain(outGainDb);
     buffer.applyGain(outGainLin);
 
-    // Mono summing (if toggled)
-    if (monoMode && buffer.getNumChannels() >= 2)
-    {
-        for (int i = 0; i < numSamples; ++i)
-        {
-            float mono = (L[i] + R[i]) * 0.5f;
-            L[i] = mono;
-            R[i] = mono;
-        }
-    }
-
     // Track peak for clipping detection
     float peak = buffer.getMagnitude(0, numSamples);
     peakSample.store(peak, std::memory_order_relaxed);
 
     // Post-fader analyzer
     if (!analyzerPre)
-        spectrumAnalyzer.pushSamples(L, R, numSamples);
+        spectrumAnalyzer.pushSamples(L, R != nullptr ? R : L, numSamples);
 }
 
 // ============================================================
